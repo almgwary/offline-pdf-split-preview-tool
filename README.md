@@ -1,0 +1,1 @@
+# offline-pdf-split-preview-tool
