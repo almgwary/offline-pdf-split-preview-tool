@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PDF Split & Export (Fullscreen Preview)</title>
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #f9f9f9;
+      padding: 2rem;
+      margin: 0;
+    }
+
+    h2 { margin-bottom: 0.25rem; }
+    .controls { margin-bottom: 1.5rem; }
+    .page-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .page-preview {
+      border: 1px solid #ccc;
+      padding: 0.5rem;
+      background: white;
+      text-align: center;
+      cursor: pointer;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+    }
+    .zoom-label {
+      margin-left: 0.5rem;
+      font-weight: bold;
+    }
+    .info {
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      color: #444;
+    }
+    .safe {
+      background: #e7f7e7;
+      border-left: 4px solid #4caf50;
+      padding: 0.5rem 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+
+    /* Fullscreen overlay styles */
+    #fullscreen {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.9);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      transition: opacity 0.3s ease;
+    }
+    #fullscreen canvas {
+      max-width: 95%;
+      max-height: 90%;
+      box-shadow: 0 0 20px black;
+      animation: zoomIn 0.3s ease-out;
+    }
+
+    @keyframes zoomIn {
+      from { transform: scale(0.85); opacity: 0; }
+      to   { transform: scale(1); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>📄 PDF Split & Export Tool</h2>
+  <div class="safe">
+    ✅ <strong>Privacy Notice:</strong> Your PDF never leaves your browser. All processing is done locally — 100% offline and secure.
+  </div>
+
+  <div class="info">
+    Upload a PDF, preview all pages, select any pages you want to export, adjust zoom, and download selected pages. Click on any page to view fullscreen.
+  </div>
+
+  <div class="controls">
+    <input type="file" id="pdf-upload" accept="application/pdf" />
+    <label for="zoom-slider">Zoom:
+      <input type="range" id="zoom-slider" min="0.25" max="2" step="0.25" value="0.5" />
+      <span class="zoom-label" id="zoom-value">0.5×</span>
+    </label>
+    <br />
+    <button id="select-all-btn">Select All</button>
+    <button id="deselect-all-btn">Deselect All</button>
+  </div>
+
+  <div id="page-list" class="page-container"></div>
+  <button id="export-btn" disabled>📥 Export Selected Pages</button>
+
+  <!-- Fullscreen viewer -->
+  <div id="fullscreen" tabindex="0"></div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+    const fileInput = document.getElementById('pdf-upload');
+    const zoomSlider = document.getElementById('zoom-slider');
+    const zoomValue = document.getElementById('zoom-value');
+    const pageList = document.getElementById('page-list');
+    const exportBtn = document.getElementById('export-btn');
+    const selectAllBtn = document.getElementById('select-all-btn');
+    const deselectAllBtn = document.getElementById('deselect-all-btn');
+    const fullscreen = document.getElementById('fullscreen');
+
+    let globalPdfDoc = null;
+    let globalPDFjsDoc = null;
+    let currentZoom = parseFloat(zoomSlider.value);
+
+    zoomSlider.addEventListener('input', () => {
+      currentZoom = parseFloat(zoomSlider.value);
+      zoomValue.textContent = `${currentZoom}×`;
+      if (globalPDFjsDoc) renderPages(globalPDFjsDoc, currentZoom);
+    });
+
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      pageList.innerHTML = 'Loading PDF...';
+      const arrayBuffer = await file.arrayBuffer();
+      const bufferForPDFjs = arrayBuffer.slice(0);
+      const bufferForPDFLib = arrayBuffer.slice(0);
+
+      globalPDFjsDoc = await pdfjsLib.getDocument({ data: bufferForPDFjs }).promise;
+      globalPdfDoc = await PDFLib.PDFDocument.load(bufferForPDFLib);
+
+      renderPages(globalPDFjsDoc, currentZoom);
+      exportBtn.disabled = false;
+    });
+
+    async function renderPages(pdf, zoom) {
+      pageList.innerHTML = '';
+      const totalPages = pdf.numPages;
+
+      for (let i = 1; i <= totalPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: zoom });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        const context = canvas.getContext('2d');
+        await page.render({ canvasContext: context, viewport }).promise;
+
+        const container = document.createElement('div');
+        container.className = 'page-preview';
+        container.innerHTML = `
+          <label>
+            <input type="checkbox" value="${i - 1}" />
+            Page ${i}
+          </label>
+        `;
+        container.appendChild(canvas);
+
+        // ✅ Add click-to-fullscreen preview
+        container.addEventListener('click', () => {
+          openFullscreenPreview(page);
+        });
+
+        pageList.appendChild(container);
+      }
+    }
+
+    exportBtn.addEventListener('click', async () => {
+      const selected = Array.from(document.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(cb => parseInt(cb.value));
+
+      if (selected.length === 0) {
+        alert("Please select at least one page.");
+        return;
+      }
+
+      const newPdf = await PDFLib.PDFDocument.create();
+      const copiedPages = await newPdf.copyPages(globalPdfDoc, selected);
+      copiedPages.forEach(p => newPdf.addPage(p));
+
+      const pdfBytes = await newPdf.save();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `selected-pages.pdf`;
+      link.click();
+    });
+
+    selectAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('#page-list input[type="checkbox"]').forEach(cb => cb.checked = true);
+    });
+
+    deselectAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('#page-list input[type="checkbox"]').forEach(cb => cb.checked = false);
+    });
+
+    // 🔍 Fullscreen preview logic
+    async function openFullscreenPreview(page) {
+      fullscreen.innerHTML = ''; // clear old
+      fullscreen.style.display = 'flex';
+
+      const zoomedViewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width = zoomedViewport.width;
+      canvas.height = zoomedViewport.height;
+
+      await page.render({
+        canvasContext: canvas.getContext('2d'),
+        viewport: zoomedViewport
+      }).promise;
+
+      fullscreen.appendChild(canvas);
+      fullscreen.focus();
+    }
+
+    // Close on click or ESC
+    fullscreen.addEventListener('click', () => fullscreen.style.display = 'none');
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') fullscreen.style.display = 'none';
+    });
+  </script>
+
+</body>
+</html>
